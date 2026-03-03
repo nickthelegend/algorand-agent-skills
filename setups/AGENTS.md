@@ -140,7 +140,7 @@ If localnet commands fail with "network unreachable" or connection errors:
 
 ## X402 Development
 
-x402 is an HTTP-native payment protocol built on the HTTP 402 "Payment Required" status code. Three components work together: **Client** requests a protected resource, **Server** responds with 402 and structured payment requirements, and **Facilitator** verifies and settles the payment on-chain. The client signs a transaction, retries the request with an `X-PAYMENT` header, and the server forwards it to the facilitator for verification and settlement before granting access.
+x402 is an HTTP-native payment protocol built on the HTTP 402 "Payment Required" status code. Three components work together: **Client** requests a protected resource, **Server** responds with 402 and structured payment requirements, and **Facilitator** verifies and settles the payment on-chain. The client signs a transaction, retries the request with a `PAYMENT-SIGNATURE` header, and the server forwards it to the facilitator for verification and settlement before granting access.
 
 Algorand (AVM) is a **first-class citizen** alongside EVM (Ethereum) and SVM (Solana) — never conditional, always registered unconditionally. It uses CAIP-2 network identifiers and supports fee abstraction (facilitator pays transaction fees), ASA payments (USDC, ALGO), atomic transaction groups, and 3.3-second finality.
 
@@ -154,7 +154,7 @@ Client                  Resource Server           Facilitator           Algorand
   | 2. 402 + requirements    |                        |                    |
   |<-------------------------|                        |                    |
   | 3. Build + sign txn      |                        |                    |
-  | 4. GET + X-PAYMENT header|                        |                    |
+  | 4. GET + PAYMENT-SIGNATURE|                      |                    |
   |------------------------->| 5. verify(payload)     |                    |
   |                          |----------------------->| 6. simulate_group  |
   |                          |                        |------------------->|
@@ -169,16 +169,28 @@ Client                  Resource Server           Facilitator           Algorand
   |<-------------------------|                        |                    |
 ```
 
+**Detailed flow:**
+1. Client makes `GET /api/data` — server returns `402` with `PaymentRequirements`
+2. `PaymentRequirements` contain: scheme (`exact`), network (CAIP-2), asset (ASA ID), amount (atomic units), payTo (Algorand address), extra (feePayer, decimals)
+3. Client builds a transaction group, signs its own transactions, encodes as base64
+4. Client retries with `PAYMENT-SIGNATURE` header containing `{ x402Version, scheme, network, payload: { paymentGroup, paymentIndex } }`
+5. Server forwards to facilitator — facilitator verifies, simulates, settles
+6. Server returns 200 with the protected resource
+
 ### CAIP-2 Network Identifiers
+
+x402 V2 uses [CAIP-2](https://github.com/ChainAgnostic/CAIPs/blob/main/CAIPs/caip-2.md) identifiers based on genesis hashes:
 
 | Network            | Identifier                                               |
 | ------------------ | -------------------------------------------------------- |
 | Algorand Testnet   | `algorand:SGO1GKSzyE7IEPItTxCByw9x8FmnrCDexi9/cOUJOiI=` |
 | Algorand Mainnet   | `algorand:wGHE2Pwdvd7S12BL5FaOP20EGYesN73ktiC1qzkkit8=`  |
 
+V1 legacy identifiers (`algorand-mainnet`, `algorand-testnet`) are still supported via automatic mapping.
+
 ### X402 Components
 
-**Client** — Wraps HTTP clients (fetch/axios/httpx/requests) to automatically handle 402 responses. Builds Algorand transaction groups using `ClientAvmSigner`, signs them, encodes as `X-PAYMENT` header, and retries the request.
+**Client** — Wraps HTTP clients (fetch/axios/httpx/requests) to automatically handle 402 responses. Builds Algorand transaction groups using `ClientAvmSigner`, signs them, encodes as `PAYMENT-SIGNATURE` header, and retries the request.
 
 **Resource Server** — Middleware for Express/Hono/Next.js/FastAPI/Flask that intercepts requests to protected routes. Returns 402 with `PaymentRequirements` (scheme, network, payTo, price, asset) when no payment header is present. Forwards valid payments to facilitator for verification and settlement.
 
@@ -187,6 +199,24 @@ Client                  Resource Server           Facilitator           Algorand
 **Paywall** — Browser UI component (`@x402-avm/paywall`) for manual payment when automatic client payment isn't available. Renders a payment form and handles wallet interaction.
 
 **Bazaar Extension** — Discovery extension (`@x402-avm/extensions` / `x402-avm[extensions]`) that registers facilitator and server capabilities for API cataloging. Clients can query available facilitators, their supported networks, and pricing through standardized endpoints.
+
+### Algorand-Specific Features
+
+**Fee Abstraction** — Algorand's atomic transaction groups enable fee abstraction. The facilitator pays transaction fees on behalf of the client through a 2-transaction group:
+1. Transaction 0 (fee payer): Self-payment by facilitator, amount=0, fee covers both txns
+2. Transaction 1 (payment): ASA transfer from client to payTo, fee=0
+Both transactions share an atomic group ID — they execute all-or-nothing.
+
+**ASA Support:**
+
+| Asset | Testnet ASA ID | Mainnet ASA ID | Decimals |
+|-------|---------------|----------------|----------|
+| USDC  | `10458941`    | `31566704`     | 6        |
+| ALGO  | `0` (native)  | `0` (native)   | 6        |
+
+**Atomic Groups** — Payment groups can include up to 16 transactions, enabling composability — additional smart contract calls or opt-ins alongside the payment.
+
+**Fast Finality** — Algorand transactions finalize in ~3.3 seconds with no reorgs or rollbacks.
 
 ### Signer Protocols (Core Architecture)
 
@@ -229,48 +259,64 @@ Protocol definitions live in the SDK; implementations are provided by users/exam
 | `x402-avm[extensions]` | Extensions (Bazaar discovery)        |
 | `x402-avm[all]`        | Everything                           |
 
+### Important Rules
+
+1. **AVM is always first-class** — never wrap AVM registration in conditional checks
+2. **Use CAIP-2 identifiers** — `algorand:SGO1GKSzyE7IEPItTxCByw9x8FmnrCDexi9/cOUJOiI=` for testnet
+3. **Signer separation** — protocol definitions live in the SDK, implementations live in examples
+4. **Raw bytes protocol** — the SDK passes raw msgpack bytes between methods; algosdk conversions happen at boundaries
+5. **Private key format** — `AVM_PRIVATE_KEY` is Base64-encoded, 64 bytes (32-byte seed + 32-byte pubkey)
+6. **Address derivation** — `encode_address(secret_key[32:])` in both Python and TypeScript
+
+### Common Errors
+
+| Error | Cause | Solution |
+|-------|-------|----------|
+| `402 Payment Required` with no payment options | AVM scheme not registered on server | Call `registerExactAvmScheme(server)` |
+| `Invalid network` | Using V1 identifier where V2 expected | Use CAIP-2 format: `algorand:SGO1...` |
+| `Simulation failed` | Transaction would fail on-chain | Check balances, ASA opt-in, group structure |
+| `Invalid key length` | Wrong private key format | Key must be 64 bytes, Base64-encoded |
+| `No signer for address` | Facilitator does not manage that address | Check `getAddresses()` returns the fee payer |
+| `Group ID mismatch` | Transactions not properly grouped | Use `algosdk.assignGroupID()` before encoding |
+| `Amount mismatch` | Payment amount differs from requirements | Use atomic units matching `paymentRequirements.amount` |
+
 ### X402 Skills
 
-**Educational:**
+Two aggregated skills cover all x402 development. Each skill has a single `SKILL.md` that acts as a router, plus a `references/` folder containing all implementation guides, API references, and code examples as named files.
 
-| Task                      | Skill                              |
-| ------------------------- | ---------------------------------- |
-| Teach x402 concepts       | `teach-algorand-x402`              |
-| Explain x402 for Python   | `explain-algorand-x402-python`     |
-| Explain x402 for TS       | `explain-algorand-x402-typescript` |
+| Task                        | Skill                      |
+| --------------------------- | -------------------------- |
+| TypeScript x402 development | `algorand-x402-typescript` |
+| Python x402 development     | `algorand-x402-python`     |
 
-**TypeScript:**
+**Skill structure:**
+```
+algorand-x402-typescript/          algorand-x402-python/
+├── SKILL.md  (router)             ├── SKILL.md  (router)
+└── references/                    └── references/
+    ├── {topic}.md                     ├── {topic}.md
+    ├── {topic}-reference.md           ├── {topic}-reference.md
+    └── {topic}-examples.md            └── {topic}-examples.md
+```
 
-| Task                      | Skill                                  |
-| ------------------------- | -------------------------------------- |
-| TS client (fetch/axios)   | `create-typescript-x402-client`        |
-| TS server (Express/Hono)  | `create-typescript-x402-server`        |
-| TS facilitator + Bazaar   | `create-typescript-x402-facilitator`   |
-| TS paywall UI             | `create-typescript-x402-paywall`       |
-| TS Next.js fullstack      | `create-typescript-x402-nextjs`        |
-| TS core/AVM direct usage  | `use-typescript-x402-core-avm`         |
+Each topic has three reference files:
+- **`{topic}.md`** — Step-by-step implementation guide (formerly the sub-skill's SKILL.md)
+- **`{topic}-reference.md`** — API details and type signatures
+- **`{topic}-examples.md`** — Complete, runnable code samples
 
-**Python:**
+**TypeScript topics:** `explain-algorand-x402-typescript`, `create-typescript-x402-client`, `create-typescript-x402-server`, `create-typescript-x402-nextjs`, `create-typescript-x402-facilitator`, `create-typescript-x402-paywall`, `use-typescript-x402-core-avm`
 
-| Task                      | Skill                                  |
-| ------------------------- | -------------------------------------- |
-| Py client (httpx/requests)| `create-python-x402-client`            |
-| Py server (FastAPI/Flask) | `create-python-x402-server`            |
-| Py facilitator            | `create-python-x402-facilitator`       |
-| Py facilitator + Bazaar   | `create-python-x402-facilitator-bazaar`|
-| Py core/AVM direct usage  | `use-python-x402-core-avm`             |
+**Python topics:** `explain-algorand-x402-python`, `create-python-x402-client`, `create-python-x402-server`, `create-python-x402-facilitator`, `use-python-x402-core-avm`
 
 ### Building X402 Applications
 
-1. **Understand**: Load `teach-algorand-x402` to explain the protocol, components, and payment flow
-2. **Choose components**: Client, server, facilitator, paywall — or a subset
-3. **Pick language**: TypeScript (`@x402-avm/*` packages) or Python (`x402-avm[extras]`)
-4. **Load creation skill**: Use the appropriate skill for each component (see tables above)
+1. **Pick language**: TypeScript (`@x402-avm/*` packages) or Python (`x402-avm[extras]`)
+2. **Load the parent skill**: `algorand-x402-typescript` or `algorand-x402-python`
+3. **Choose components**: Client, server, facilitator, paywall — or a subset
+4. **Read the SKILL.md** router to find the right reference files for your component
 5. **Implement signers**: `ClientAvmSigner` for clients, `FacilitatorAvmSigner` for facilitators — protocol definitions are in the SDK, implementations in your code
-6. **Use core skills**: `use-typescript-x402-core-avm` or `use-python-x402-core-avm` for direct AVM integration beyond the HTTP wrappers
-7. **Use explanation skills**: `explain-algorand-x402-typescript` or `explain-algorand-x402-python` to understand language-specific patterns
 
-### Environment Variables
+### x402 Algorand Environment Variables
 
 | Variable          | Purpose                                      |
 | ----------------- | -------------------------------------------- |
@@ -278,3 +324,10 @@ Protocol definitions live in the SDK; implementations are provided by users/exam
 | `ALGOD_SERVER`    | Custom Algod node URL (optional, defaults to AlgoNode) |
 | `ALGOD_TOKEN`     | Algod node API token (optional)              |
 | `PAY_TO`          | Algorand address to receive payments (server)|
+
+### External Algorand x402 Resources
+
+- [GoPlausible x402-avm Documentation](https://github.com/GoPlausible/.github/blob/main/profile/algorand-x402-documentation/README.md)
+- [GoPlausible x402-avm Examples](https://github.com/GoPlausible/x402-avm/tree/branch-v2-algorand-publish/examples/)
+- [Coinbase x402 Protocol](https://github.com/coinbase/x402)
+- [CAIP-2 Specification](https://github.com/ChainAgnostic/CAIPs/blob/main/CAIPs/caip-2.md)
