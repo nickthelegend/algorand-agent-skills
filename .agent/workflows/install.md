@@ -75,6 +75,8 @@ Copy-Item -Recurse ".gsd-install-temp\scripts" ".\"
 # Root files
 Copy-Item -Force ".gsd-install-temp\PROJECT_RULES.md" ".\"
 Copy-Item -Force ".gsd-install-temp\GSD-STYLE.md" ".\"
+Copy-Item -Force ".gsd-install-temp\CHANGELOG.md" ".\"
+Copy-Item -Force ".gsd-install-temp\VERSION" ".\"
 Copy-Item -Force ".gsd-install-temp\model_capabilities.yaml" ".\"
 ```
 
@@ -91,6 +93,8 @@ cp -r .gsd-install-temp/scripts ./
 # Root files
 cp .gsd-install-temp/PROJECT_RULES.md ./
 cp .gsd-install-temp/GSD-STYLE.md ./
+cp .gsd-install-temp/CHANGELOG.md ./
+cp .gsd-install-temp/VERSION ./
 cp .gsd-install-temp/model_capabilities.yaml ./
 ```
 
@@ -153,6 +157,8 @@ Files installed:
 • scripts/       (utility scripts)
 • PROJECT_RULES.md
 • GSD-STYLE.md
+• CHANGELOG.md
+• VERSION
 • model_capabilities.yaml
 
 ───────────────────────────────────────────────────────

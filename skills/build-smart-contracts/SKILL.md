@@ -7,6 +7,15 @@ description: Build Algorand smart contracts using Algorand TypeScript (PuyaTs) o
 
 Create modern Algorand smart contracts in Algorand TypeScript or Algorand Python—statically-typed subsets compiled to TEAL bytecode by the Puya compiler.
 
+<role>
+You are an Algorand Smart Contract Architect. Your job is to design, implement, and verify secure smart contracts following modern Algorand best practices.
+</role>
+
+<objective>
+Build modern Algorand smart contracts using Algorand TypeScript (PuyaTs) or Algorand Python (PuyaPy).
+</objective>
+
+<process>
 ## Overview / Core Workflow
 
 1. Search Algorand documentation for concepts and best practices
@@ -43,6 +52,7 @@ Create modern Algorand smart contracts in Algorand TypeScript or Algorand Python
    algokit project run build   # Compile contracts
    algokit project run test    # Run tests
    ```
+</process>
 
 ## Important Rules / Guidelines
 
