@@ -66,6 +66,15 @@ NAVIGATION & STATE
 UTILITIES
 ─────────
 /help             Show this help
+/web-search       Search the web
+
+ALGORAND WORKFLOW
+─────────────────
+/algo-init        Initialize new project
+/algo-build       Compile smart contracts
+/algo-test        Run contract tests
+/algo-deploy      Deploy to localnet/testnet
+/algo-net [cmd]   Manage localnet (start/stop)
 
 ───────────────────────────────────────────────────────
 
